@@ -64,7 +64,7 @@ drawUI state = [ui]
            ListView
            (DV.fromList
               (map
-                 (\Item {content = content, due = due, itemState = itemState} ->
+                 (\Item {content = content, itemState = itemState} ->
                     (case itemState of
                        New -> "[+] "
                        Cancel -> "[X] "
@@ -214,7 +214,6 @@ data ItemState
 
 data Item = Item
   { content :: String
-  , due :: String
   , itemState :: ItemState
   } deriving (Show)
 
@@ -226,18 +225,16 @@ instance DA.FromJSON ItemList where
 instance DA.FromJSON Item where
   parseJSON =
     DA.withObject "Item" $ \o ->
-      Item <$> o .: "content" <*> o .: "date_string" <*>
-      (o .: "id" >>= return . Existing)
+      Item <$> o .: "content" <*> (o .: "id" >>= return . Existing)
 
 addItem :: String -> ItemList -> ItemList
-addItem content (ItemList l) = l ++ [Item content "" New] & ItemList
+addItem content (ItemList l) = l ++ [Item content New] & ItemList
 
 markItem :: Int -> ItemList -> ItemList
 markItem 0 (ItemList (head:tail)) =
-  let Item {content = content, due = due, itemState = itemState} = head
+  let Item {content = content, itemState = itemState} = head
   in Item
      { content = content
-     , due = due
      , itemState =
          case itemState of
            Delete i -> Existing i
@@ -273,7 +270,7 @@ commitItems token (ItemList items) = do
   let url = "https://todoist.com/API/v7/sync"
   strList <-
     foldl
-      (\prev Item {content = content, due = due, itemState = itemState} -> do
+      (\prev Item {content = content,  itemState = itemState} -> do
          prevStrList <- prev
          case itemState of
            New -> do
