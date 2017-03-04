@@ -146,7 +146,7 @@ appEvent l (BT.VtyEvent e) =
              in TodoistState
                 { items =
                     if newContent /= ""
-                      then addItem newContent items
+                      then addItem newContent items & sort
                       else items
                 , currentIndex = currentIndex
                 , focusRing = BF.focusNext focusRing
@@ -213,8 +213,15 @@ data ItemState
 
 data Item = Item
   { content :: String
+  , itemOrder :: Int
   , itemState :: ItemState
   } deriving (Show)
+
+instance Eq Item where
+  (==) a b = (itemOrder a) == (itemOrder b)
+
+instance Ord Item where
+  compare a b = compare (itemOrder a) (itemOrder b)
 
 instance DA.FromJSON ItemList where
   parseJSON =
@@ -224,16 +231,20 @@ instance DA.FromJSON ItemList where
 instance DA.FromJSON Item where
   parseJSON =
     DA.withObject "Item" $ \o ->
-      Item <$> o .: "content" <*> (o .: "id" >>= return . Existing)
+      Item <$> o .: "content" <*> o .: "item_order" <*>
+      (o .: "id" >>= return . Existing)
 
 addItem :: String -> [Item] -> [Item]
-addItem content l = l ++ [Item content New]
+addItem content l =
+  let len = length l
+  in l ++ [Item {content = content, itemOrder = len + 1, itemState = New}]
 
 markItem :: Int -> [Item] -> [Item]
 markItem 0 (head:tail) =
-  let Item {content = content, itemState = itemState} = head
+  let Item {content = content, itemOrder = itemOrder, itemState = itemState} = head
   in Item
      { content = content
+     , itemOrder = itemOrder
      , itemState =
          case itemState of
            Delete i -> Existing i
@@ -314,7 +325,7 @@ main = do
     itemList <- getItems token
     let state =
           TodoistState
-          { items = itemList
+          { items = sort itemList
           , currentIndex = 0
           , focusRing = BF.focusRing [ListView, Editor]
           , editor = BWE.editor Editor (BWC.str . unlines) Nothing ""
