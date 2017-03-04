@@ -35,7 +35,7 @@ import qualified System.Directory as SD
 import qualified System.FilePath.Posix as SFP
 
 data TodoistState = TodoistState
-  { items :: ItemList
+  { items :: [Item]
   , currentIndex :: Int
   , focusRing :: BF.FocusRing Name
   , editor :: BWE.Editor String Name
@@ -59,8 +59,7 @@ drawUI state = [ui]
                  } = state
     ed = BF.withFocusRing focusRing BWE.renderEditor editor
     l =
-      let ItemList i = items
-      in BWL.list
+      BWL.list
            ListView
            (DV.fromList
               (map
@@ -71,7 +70,7 @@ drawUI state = [ui]
                        Delete _ -> "[X] "
                        Existing _ -> "[ ] ") ++
                     content)
-                 i))
+                 items))
            1 &
          BWL.listMoveTo currentIndex
     ui =
@@ -117,12 +116,12 @@ appEvent l (BT.VtyEvent e) =
                    }
              in BM.continue newState
            GV.EvKey (GV.KChar 'j') [] ->
-             let TodoistState { items = ItemList items
+             let TodoistState { items = items
                               , currentIndex = currentIndex
                               } = l
              in let newState =
                       TodoistState
-                      { items = ItemList items
+                      { items = items
                       , currentIndex =
                           if currentIndex < (length items) - 1
                             then currentIndex + 1
@@ -227,11 +226,11 @@ instance DA.FromJSON Item where
     DA.withObject "Item" $ \o ->
       Item <$> o .: "content" <*> (o .: "id" >>= return . Existing)
 
-addItem :: String -> ItemList -> ItemList
-addItem content (ItemList l) = l ++ [Item content New] & ItemList
+addItem :: String -> [Item] -> [Item]
+addItem content l = l ++ [Item content New]
 
-markItem :: Int -> ItemList -> ItemList
-markItem 0 (ItemList (head:tail)) =
+markItem :: Int -> [Item] -> [Item]
+markItem 0 (head:tail) =
   let Item {content = content, itemState = itemState} = head
   in Item
      { content = content
@@ -242,31 +241,31 @@ markItem 0 (ItemList (head:tail)) =
            New -> Cancel
            Cancel -> New
      } :
-     tail & ItemList
-markItem idx (ItemList (head:tail)) =
-  let ItemList newTail = markItem (idx - 1) (ItemList tail)
-  in head : newTail & ItemList
-markItem _ (ItemList []) = ItemList []
+     tail
+markItem idx (head:tail) =
+  let newTail = markItem (idx - 1) tail
+  in head : newTail
+markItem _ [] = []
 
 
-getProjects :: String -> IO ProjectList
+getProjects :: String -> IO [Project]
 getProjects token = do
   res <- getResource token Projects
   let decoded = DA.decode res :: Maybe ProjectList
   case decoded of
-    Nothing -> return $ ProjectList []
-    Just a -> return $ a
+    Nothing -> return $ []
+    Just (ProjectList a) -> return $ a
 
-getItems :: String -> IO ItemList
+getItems :: String -> IO [Item]
 getItems token = do
   res <- getResource token Items
   let decoded = DA.decode res :: Maybe ItemList
   case decoded of
-    Nothing -> return $ ItemList []
-    Just a -> return $ a
+    Nothing -> return $ []
+    Just (ItemList a) -> return $ a
 
-commitItems :: String -> ItemList -> IO ()
-commitItems token (ItemList items) = do
+commitItems :: String -> [Item] -> IO ()
+commitItems token items = do
   let url = "https://todoist.com/API/v7/sync"
   strList <-
     foldl
