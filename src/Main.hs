@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE NamedFieldPuns #-}
 module Main where
 
 import Data.List
@@ -52,27 +53,17 @@ listDrawElement _ = BWC.padRight BT.Max . BWC.str
 drawUI :: TodoistState -> [BT.Widget Name]
 drawUI state = [ui]
   where
-    TodoistState { items = items
-                 , currentIndex = currentIndex
-                 , focusRing = focusRing
-                 , editor = editor
-                 } = state
+    TodoistState {items, currentIndex, focusRing, editor} = state
     ed = BF.withFocusRing focusRing BWE.renderEditor editor
     l =
       BWL.list
-           ListView
-           (DV.fromList
-              (map
-                 (\Item {content = content, itemState = itemState} ->
-                    (case itemState of
-                       New -> "[+] "
-                       Cancel -> "[X] "
-                       Delete _ -> "[X] "
-                       Existing _ -> "[ ] ") ++
-                    content)
-                 items))
-           1 &
-         BWL.listMoveTo currentIndex
+        ListView
+        (DV.fromList
+           (map
+              (\Item {content, itemState} -> itemStateFlag itemState ++ content)
+              items))
+        1 &
+      BWL.listMoveTo currentIndex
     ui =
       BWC.vBox
         [ BWC.str "Inbox" & BWB.borderWithLabel $
@@ -84,48 +75,52 @@ appEvent :: TodoistState
          -> BT.BrickEvent Name e
          -> BT.EventM Name (BT.Next TodoistState)
 appEvent l (BT.VtyEvent e) =
-  let TodoistState { items = items
-                   , currentIndex = currentIndex
-                   , focusRing = focusRing
-                   , editor = editor
-                   } = l
+  let TodoistState {items, currentIndex, focusRing, editor} = l
   in case BF.focusGetCurrent focusRing of
        Nothing -> BM.continue l
        Just ListView ->
          case e of
            GV.EvKey GV.KEsc [] -> BM.halt l
+           GV.EvKey (GV.KChar '=') [] ->
+             BM.continue
+               TodoistState
+               { items = swapItemOrder (currentIndex - 1) items
+               , currentIndex = max 0 $ currentIndex - 1
+               , focusRing
+               , editor
+               }
+           GV.EvKey (GV.KChar '-') [] ->
+             BM.continue
+               TodoistState
+               { items = swapItemOrder currentIndex items
+               , currentIndex = min (length items - 1) (currentIndex + 1)
+               , focusRing
+               , editor
+               }
            GV.EvKey (GV.KChar ' ') [] ->
              BM.continue
                TodoistState
                { items = markItem currentIndex items
-               , currentIndex = currentIndex
-               , focusRing = focusRing
-               , editor = editor
+               , currentIndex
+               , focusRing
+               , editor
                }
            GV.EvKey (GV.KChar 'q') [] -> BM.halt l
            GV.EvKey (GV.KChar 'k') [] ->
              let newState =
                    TodoistState
                    { items = items
-                   , currentIndex =
-                       if 0 < currentIndex
-                         then currentIndex - 1
-                         else currentIndex
+                   , currentIndex = max 0 $ currentIndex - 1
                    , focusRing = focusRing
                    , editor = editor
                    }
              in BM.continue newState
            GV.EvKey (GV.KChar 'j') [] ->
-             let TodoistState { items = items
-                              , currentIndex = currentIndex
-                              } = l
+             let TodoistState {items = items, currentIndex = currentIndex} = l
              in let newState =
                       TodoistState
                       { items = items
-                      , currentIndex =
-                          if currentIndex < (length items) - 1
-                            then currentIndex + 1
-                            else currentIndex
+                      , currentIndex = min (length items - 1) (currentIndex + 1)
                       , focusRing = focusRing
                       , editor = editor
                       }
@@ -143,16 +138,20 @@ appEvent l (BT.VtyEvent e) =
          case e of
            GV.EvKey GV.KEnter [] ->
              let newContent = BWE.getEditContents editor & intercalate " "
-             in TodoistState
-                { items =
-                    if newContent /= ""
-                      then addItem newContent items & sort
-                      else items
-                , currentIndex = currentIndex
-                , focusRing = BF.focusNext focusRing
-                , editor = BWE.applyEdit DTZ.clearZipper editor
-                } &
-                BM.continue
+             in let newIndex =
+                      if newContent == ""
+                        then currentIndex
+                        else length items
+                in TodoistState
+                   { items =
+                       if newContent /= ""
+                         then addItem newContent items & sort
+                         else items
+                   , currentIndex = newIndex
+                   , focusRing = BF.focusNext focusRing
+                   , editor = BWE.applyEdit DTZ.clearZipper editor
+                   } &
+                   BM.continue
            ev -> do
              nextEditor <- BWE.handleEditorEvent ev editor
              BM.continue $
@@ -207,9 +206,30 @@ data ItemList =
 data ItemState
   = New
   | Cancel
-  | Delete Int
-  | Existing Int
+  | Existing { id :: Int
+            ,  toDelete :: Bool
+            ,  toUpdate :: Bool}
   deriving (Show)
+
+itemStateFlag :: ItemState -> String
+itemStateFlag New = "[+] "
+itemStateFlag Cancel = "[X] "
+itemStateFlag Existing {toDelete, toUpdate} =
+  if toDelete
+    then "[X] "
+    else if toUpdate
+           then "[*] "
+           else "[ ] "
+
+markToUpdate :: ItemState -> ItemState
+markToUpdate Existing {id, toDelete} = Existing {id, toDelete, toUpdate = True}
+markToUpdate i = i
+
+toggleToDelete :: ItemState -> ItemState
+toggleToDelete Existing {id, toDelete, toUpdate} =
+  Existing {id, toDelete = not toDelete, toUpdate}
+toggleToDelete New = Cancel
+toggleToDelete Cancel = New
 
 data Item = Item
   { content :: String
@@ -232,7 +252,8 @@ instance DA.FromJSON Item where
   parseJSON =
     DA.withObject "Item" $ \o ->
       Item <$> o .: "content" <*> o .: "item_order" <*>
-      (o .: "id" >>= return . Existing)
+      (o .: "id" >>= \id ->
+         return Existing {id, toDelete = False, toUpdate = False})
 
 addItem :: String -> [Item] -> [Item]
 addItem content l =
@@ -241,16 +262,12 @@ addItem content l =
 
 markItem :: Int -> [Item] -> [Item]
 markItem 0 (head:tail) =
-  let Item {content = content, itemOrder = itemOrder, itemState = itemState} = head
+  let Item {content, itemOrder, itemState} =
+        head
   in Item
-     { content = content
-     , itemOrder = itemOrder
-     , itemState =
-         case itemState of
-           Delete i -> Existing i
-           Existing i -> Delete i
-           New -> Cancel
-           Cancel -> New
+     { content
+     , itemOrder
+     , itemState = toggleToDelete itemState
      } :
      tail
 markItem idx (head:tail) =
@@ -258,6 +275,66 @@ markItem idx (head:tail) =
   in head : newTail
 markItem _ [] = []
 
+reorderItems :: [Item] -> [Item]
+reorderItems items =
+  let retain =
+        map
+          (\Item {itemState} ->
+             case itemState of
+               New -> True
+               Cancel -> False
+               Existing {toDelete} ->
+                 if toDelete
+                   then False
+                   else True)
+          items
+  in let indexList =
+           foldl
+             (\indexList flag ->
+                case indexList of
+                  [] ->
+                    if flag
+                      then [1]
+                      else [0]
+                  l@(hd:_) ->
+                    if flag
+                      then (hd + 1) : l
+                      else hd : l)
+             []
+             retain
+     in map
+          (\(Item {content, itemOrder, itemState}, newItemOrder) ->
+             Item
+             { content
+             , itemOrder = newItemOrder
+             , itemState =
+                 if itemOrder == newItemOrder
+                   then itemState
+                   else markToUpdate itemState
+             }) $
+        zip items $ reverse indexList
+
+swapItemOrder :: Int -> [Item] -> [Item]
+swapItemOrder 0 (Item { content = fstContent
+                      , itemOrder = fstOrder
+                      , itemState = fstState
+                      }:Item { content = sndContent
+                             , itemOrder = sndOrder
+                             , itemState = sndState
+                             }:tail) =
+  Item
+  { content = sndContent
+  , itemOrder = fstOrder
+  , itemState = markToUpdate sndState
+  } :
+  Item
+  { content = fstContent
+  , itemOrder = sndOrder
+  , itemState = markToUpdate fstState
+  } :
+  tail
+swapItemOrder n (head:tail) = head : (swapItemOrder (n - 1) tail)
+swapItemOrder _ l = l
 
 getProjects :: String -> IO [Project]
 getProjects token = do
@@ -280,7 +357,7 @@ commitItems token items = do
   let url = "https://todoist.com/API/v7/sync"
   strList <-
     foldl
-      (\prev Item {content = content,  itemState = itemState} -> do
+      (\prev Item {content, itemState, itemOrder} -> do
          prevStrList <- prev
          case itemState of
            New -> do
@@ -290,17 +367,36 @@ commitItems token items = do
                    DU.toString uuid ++
                    "\",\"args\":{\"content\":\"" ++
                    content ++
-                   "\"}}"
-             return $ newCommand : prevStrList
-           Delete id -> do
-             uuid <- DUV4.nextRandom
-             let newCommand =
-                   "{\"type\":\"item_close\",\"temp_id\":\"\",\"uuid\":\"" ++
-                   DU.toString uuid ++
-                   "\",\"args\":{\"id\":" ++
-                   show id ++
+                   "\",\"item_order\":" ++
+                   show itemOrder ++
                    "}}"
              return $ newCommand : prevStrList
+           Existing {id, toDelete, toUpdate} ->
+             if toDelete
+               then do
+                 uuid <- DUV4.nextRandom
+                 let newCommand =
+                       "{\"type\":\"item_close\",\"temp_id\":\"\",\"uuid\":\"" ++
+                       DU.toString uuid ++
+                       "\",\"args\":{\"id\":" ++
+                       show id ++
+                       "}}"
+                 return $ newCommand : prevStrList
+               else if toUpdate
+                      then do
+                        uuid <- DUV4.nextRandom
+                        let newCommand =
+                              "{\"type\":\"item_update\",\"temp_id\":\"\",\"uuid\":\"" ++
+                              DU.toString uuid ++
+                              "\",\"args\":{\"id\":" ++
+                              show id ++
+                              ",\"content\":\"" ++
+                              content ++
+                              "\",\"item_order\":" ++
+                              show itemOrder ++
+                              "}}"
+                        return $ newCommand : prevStrList
+                      else return prevStrList
            _ -> return prevStrList)
       (return [])
       items
@@ -343,5 +439,5 @@ main = do
           }
     finalState <- BM.defaultMain app state
     let TodoistState {items = items} = finalState
-    commitItems token items
+    commitItems token $ reorderItems items
     return ()
