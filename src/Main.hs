@@ -40,6 +40,7 @@ data TodoistState = TodoistState
   , currentIndex :: Int
   , focusRing :: BF.FocusRing Name
   , editor :: BWE.Editor String Name
+  , editing :: Bool
   }
 
 data Name
@@ -74,93 +75,100 @@ drawUI state = [ui]
 appEvent :: TodoistState
          -> BT.BrickEvent Name e
          -> BT.EventM Name (BT.Next TodoistState)
-appEvent l (BT.VtyEvent e) =
-  let TodoistState {items, currentIndex, focusRing, editor} = l
-  in case BF.focusGetCurrent focusRing of
-       Nothing -> BM.continue l
-       Just ListView ->
-         case e of
-           GV.EvKey GV.KEsc [] -> BM.halt l
-           GV.EvKey (GV.KChar '=') [] ->
-             BM.continue
-               TodoistState
-               { items = swapItemOrder (currentIndex - 1) items
-               , currentIndex = max 0 $ currentIndex - 1
-               , focusRing
-               , editor
-               }
-           GV.EvKey (GV.KChar '-') [] ->
-             BM.continue
-               TodoistState
-               { items = swapItemOrder currentIndex items
-               , currentIndex = min (length items - 1) (currentIndex + 1)
-               , focusRing
-               , editor
-               }
-           GV.EvKey (GV.KChar ' ') [] ->
-             BM.continue
-               TodoistState
-               { items = markItem currentIndex items
-               , currentIndex
-               , focusRing
-               , editor
-               }
-           GV.EvKey (GV.KChar 'q') [] -> BM.halt l
-           GV.EvKey (GV.KChar 'k') [] ->
-             let newState =
+appEvent l@TodoistState {items, currentIndex, focusRing, editor, editing} (BT.VtyEvent e) =
+  case BF.focusGetCurrent focusRing of
+    Nothing -> BM.continue l
+    Just ListView ->
+      case e of
+        GV.EvKey GV.KEsc [] -> BM.halt l
+        GV.EvKey (GV.KChar '=') [] ->
+          BM.continue
+            TodoistState
+            { items = swapItemOrder (currentIndex - 1) items
+            , currentIndex = max 0 $ currentIndex - 1
+            , focusRing
+            , editor
+            , editing
+            }
+        GV.EvKey (GV.KChar '-') [] ->
+          BM.continue
+            TodoistState
+            { items = swapItemOrder currentIndex items
+            , currentIndex = min (length items - 1) (currentIndex + 1)
+            , focusRing
+            , editor
+            , editing
+            }
+        GV.EvKey (GV.KChar ' ') [] ->
+          BM.continue
+            TodoistState
+            { items = markItem currentIndex items
+            , currentIndex
+            , focusRing
+            , editor
+            , editing
+            }
+        GV.EvKey (GV.KChar 'q') [] -> BM.halt l
+        GV.EvKey (GV.KChar 'k') [] ->
+          let newState =
+                TodoistState
+                { items
+                , currentIndex = max 0 $ currentIndex - 1
+                , focusRing
+                , editor
+                , editing
+                }
+          in BM.continue newState
+        GV.EvKey (GV.KChar 'j') [] ->
+          let TodoistState {items = items, currentIndex = currentIndex} = l
+          in let newState =
                    TodoistState
-                   { items = items
-                   , currentIndex = max 0 $ currentIndex - 1
-                   , focusRing = focusRing
-                   , editor = editor
+                   { items
+                   , currentIndex = min (length items - 1) (currentIndex + 1)
+                   , focusRing
+                   , editor
+                   , editing
                    }
              in BM.continue newState
-           GV.EvKey (GV.KChar 'j') [] ->
-             let TodoistState {items = items, currentIndex = currentIndex} = l
-             in let newState =
-                      TodoistState
-                      { items = items
-                      , currentIndex = min (length items - 1) (currentIndex + 1)
-                      , focusRing = focusRing
-                      , editor = editor
-                      }
-                in BM.continue newState
-           GV.EvKey (GV.KChar 'c') [] ->
-             TodoistState
-             { items = items
-             , currentIndex = currentIndex
-             , focusRing = BF.focusNext focusRing
-             , editor = editor
-             } &
-             BM.continue
-           _ -> BM.continue l
-       Just Editor ->
-         case e of
-           GV.EvKey GV.KEnter [] ->
-             let newContent = BWE.getEditContents editor & intercalate " "
-             in let newIndex =
-                      if newContent == ""
-                        then currentIndex
-                        else length items
-                in TodoistState
-                   { items =
-                       if newContent /= ""
-                         then addItem newContent items & sort
-                         else items
-                   , currentIndex = newIndex
-                   , focusRing = BF.focusNext focusRing
-                   , editor = BWE.applyEdit DTZ.clearZipper editor
-                   } &
-                   BM.continue
-           ev -> do
-             nextEditor <- BWE.handleEditorEvent ev editor
-             BM.continue $
-               TodoistState
-               { items = items
-               , currentIndex = currentIndex
-               , focusRing = focusRing
-               , editor = nextEditor
-               }
+        GV.EvKey (GV.KChar 'c') [] ->
+          TodoistState
+          { items
+          , currentIndex = currentIndex
+          , focusRing = BF.focusNext focusRing
+          , editor
+          , editing
+          } &
+          BM.continue
+        _ -> BM.continue l
+    Just Editor ->
+      case e of
+        GV.EvKey GV.KEnter [] ->
+          let newContent = BWE.getEditContents editor & intercalate " "
+          in let newIndex =
+                   if newContent == ""
+                     then currentIndex
+                     else length items
+             in TodoistState
+                { items =
+                    if newContent /= ""
+                      then addItem newContent items & sort
+                      else items
+                , currentIndex = newIndex
+                , focusRing = BF.focusNext focusRing
+                , editor = BWE.applyEdit DTZ.clearZipper editor
+                , editing
+                } &
+                BM.continue
+        ev -> do
+          nextEditor <- BWE.handleEditorEvent ev editor
+          BM.continue $
+            TodoistState
+            { items
+            , currentIndex
+            , focusRing
+            , editor = nextEditor
+            , editing
+            }
 appEvent l _ = BM.continue l
 
 data ResourceType = Projects | Items
@@ -425,6 +433,7 @@ main = do
           , currentIndex = 0
           , focusRing = BF.focusRing [ListView, Editor]
           , editor = BWE.editor Editor (BWC.str . unlines) Nothing ""
+          , editing = False
           }
     let app =
           BM.App
@@ -438,6 +447,6 @@ main = do
               const
           }
     finalState <- BM.defaultMain app state
-    let TodoistState {items = items} = finalState
+    let TodoistState {items} = finalState
     commitItems token $ reorderItems items
     return ()
