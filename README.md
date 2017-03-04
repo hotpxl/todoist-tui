@@ -10,10 +10,11 @@ Put your Todoist API token under `~/.config/todoist`.
 
 Current supported functionalities include:
 * Add item
+* Modify item
 * Complete item
 * Reorder
 
-I will try to support due dates and modifying items if I somehow need to use them. Currently everything goes into Inbox project and stays there. This is my workflow. So I am not going to support multiple projects.
+I will try to support due dates if I somehow need to use them. Currently everything goes into Inbox project and stays there. This is my workflow. So I am not going to support multiple projects.
 
 ## Keys
 
